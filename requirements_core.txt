@@ -1,0 +1,51 @@
+# Core Dependencies
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Neo4j and Graph Database
+neo4j==5.15.0
+py2neo==2021.2.4
+
+# NLP and Financial Models
+transformers==4.36.0
+torch==2.1.0
+spacy==3.7.2
+nltk==3.8.1
+
+# Financial Data APIs
+yfinance==0.2.33
+finnhub-python==2.4.19
+praw==7.7.1
+feedparser==6.0.10
+requests==2.31.0
+beautifulsoup4==4.12.2
+
+# LLM Integration - Simple versions
+openai
+anthropic
+langchain
+langchain-openai
+langchain-anthropic
+
+# Data Processing
+pandas==2.1.4
+numpy==1.26.2
+python-dateutil==2.8.2
+
+# Web Interface
+streamlit==1.29.0
+plotly==5.18.0
+networkx==3.2.1
+pyvis==0.3.2
+
+# Utilities
+schedule==1.2.0
+python-json-logger==2.0.7
+tqdm==4.66.1
+
+# Development
+pytest==7.4.3
+black==23.12.1
+flake8==7.0.0
+jupyter==1.0.0
