@@ -13,8 +13,14 @@ logger = logging.getLogger(__name__)
 class EntityExtractor:
     """Extracts entities and performs sentiment analysis on financial text."""
 
-    def __init__(self):
-        """Initialize entity extractor with spaCy and FinBERT."""
+    def __init__(self, llm_client=None):
+        """Initialize entity extractor with spaCy and FinBERT.
+
+        Args:
+            llm_client: Optional LLM client for enhanced entity extraction
+        """
+        self.llm_client = llm_client
+
         # Load spaCy model for NER
         try:
             self.nlp = spacy.load("en_core_web_sm")
@@ -75,7 +81,7 @@ class EntityExtractor:
 
     def extract_financial_entities(self, text: str) -> Dict[str, List[str]]:
         """
-        Extract financial-specific entities.
+        Extract financial-specific entities with LLM enhancement.
 
         Args:
             text: Input text
@@ -83,7 +89,7 @@ class EntityExtractor:
         Returns:
             Dictionary with categorized entities
         """
-        # Common company name to ticker mapping
+        # Common company name to ticker mapping (expanded)
         company_mappings = {
             'apple': 'AAPL',
             'microsoft': 'MSFT',
@@ -99,8 +105,126 @@ class EntityExtractor:
             'chase': 'JPM',
             'visa': 'V',
             'walmart': 'WMT',
+            'netflix': 'NFLX',
+            'paypal': 'PYPL',
+            'adobe': 'ADBE',
+            'salesforce': 'CRM',
+            'oracle': 'ORCL',
+            'intel': 'INTC',
+            'amd': 'AMD',
+            'qualcomm': 'QCOM',
+            'cisco': 'CSCO',
+            'ibm': 'IBM',
+            'twitter': 'TWTR',
+            'uber': 'UBER',
+            'lyft': 'LYFT',
+            'airbnb': 'ABNB',
+            'spotify': 'SPOT',
+            'zoom': 'ZM',
+            'slack': 'WORK',
+            'docusign': 'DOCU',
+            'snowflake': 'SNOW',
+            'palantir': 'PLTR',
+            'robinhood': 'HOOD',
+            'coinbase': 'COIN',
         }
 
+        # Try LLM-based extraction first if available
+        if self.llm_client:
+            try:
+                llm_result = self._llm_extract_entities(text, company_mappings)
+                if llm_result:
+                    return llm_result
+            except Exception as e:
+                logger.warning(f"LLM entity extraction failed: {e}, falling back to rule-based")
+
+        # Fall back to rule-based extraction
+        return self._rule_based_extract_entities(text, company_mappings)
+
+    def _llm_extract_entities(self, text: str, company_mappings: Dict) -> Dict[str, List[str]]:
+        """
+        Use LLM to extract entities with financial context understanding.
+
+        Args:
+            text: Input text
+            company_mappings: Dictionary of company names to tickers
+
+        Returns:
+            Dictionary with categorized entities
+        """
+        if not self.llm_client:
+            return None
+
+        entity_prompt = f"""Extract financial entities from this query. Respond with ONLY a JSON object.
+
+Query: "{text}"
+
+Extract:
+1. Company names and stock tickers (if mentioned)
+2. Sector/industry names
+3. Financial metrics or concepts mentioned
+
+Return JSON format:
+{{
+    "tickers": ["AAPL", "MSFT"],
+    "companies": ["Apple", "Microsoft"],
+    "sectors": ["Technology"],
+    "concepts": ["sentiment", "market cap", "price"]
+}}
+
+Known companies: {', '.join(company_mappings.keys())}
+
+JSON:"""
+
+        try:
+            response = self.llm_client.generate_response(
+                prompt=entity_prompt,
+                temperature=0.1
+            ).strip()
+
+            # Extract JSON from response
+            import json
+            # Try to find JSON in the response
+            json_start = response.find('{')
+            json_end = response.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                json_str = response[json_start:json_end]
+                llm_entities = json.loads(json_str)
+
+                # Merge with rule-based extraction for robustness
+                rule_based = self._rule_based_extract_entities(text, company_mappings)
+
+                # Combine results
+                result = {
+                    'tickers': list(set(llm_entities.get('tickers', []) + rule_based.get('tickers', []))),
+                    'companies': list(set(llm_entities.get('companies', []) + rule_based.get('companies', []))),
+                    'sectors': llm_entities.get('sectors', []),
+                    'concepts': llm_entities.get('concepts', []),
+                    'people': rule_based.get('people', []),
+                    'locations': rule_based.get('locations', []),
+                    'money': rule_based.get('money', []),
+                    'percentages': rule_based.get('percentages', []),
+                    'dates': rule_based.get('dates', [])
+                }
+
+                return result
+
+        except Exception as e:
+            logger.warning(f"Error in LLM entity extraction: {e}")
+
+        return None
+
+    def _rule_based_extract_entities(self, text: str, company_mappings: Dict) -> Dict[str, List[str]]:
+        """
+        Rule-based entity extraction (original method).
+
+        Args:
+            text: Input text
+            company_mappings: Dictionary of company names to tickers
+
+        Returns:
+            Dictionary with categorized entities
+        """
         entities = self.extract_entities(text)
 
         result = {
@@ -109,7 +233,9 @@ class EntityExtractor:
             'locations': [],
             'money': [],
             'percentages': [],
-            'dates': []
+            'dates': [],
+            'sectors': [],
+            'concepts': []
         }
 
         for ent in entities:

@@ -4,6 +4,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from src.graph_db.neo4j_connector import Neo4jConnector
 from src.entity_extraction.entity_extractor import EntityExtractor
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -11,15 +12,31 @@ logger = logging.getLogger(__name__)
 class GraphRAGQueryEngine:
     """Translates natural language queries to Cypher and retrieves graph data."""
 
-    def __init__(self, connector: Neo4jConnector):
+    def __init__(self, connector: Neo4jConnector, llm_client=None):
         """
         Initialize query engine.
 
         Args:
             connector: Neo4j connector instance
+            llm_client: Optional LLM client for semantic query understanding
         """
         self.connector = connector
-        self.entity_extractor = EntityExtractor()
+        self.llm_client = llm_client
+        # Pass LLM client to entity extractor for enhanced extraction
+        self.entity_extractor = EntityExtractor(llm_client=llm_client)
+
+        # Financial terminology mapping for better semantic understanding
+        self.financial_synonyms = {
+            'sentiment': ['feeling', 'mood', 'opinion', 'perception', 'outlook', 'tone', 'attitude', 'view'],
+            'news': ['article', 'headlines', 'stories', 'updates', 'reports', 'announcements', 'press'],
+            'events': ['earnings', 'merger', 'acquisition', 'announcement', 'conference', 'filing', 'dividend'],
+            'performance': ['returns', 'gains', 'losses', 'growth', 'decline', 'change', 'movement'],
+            'market': ['stock', 'trading', 'exchange', 'securities', 'equities', 'shares'],
+            'overview': ['summary', 'snapshot', 'breakdown', 'analysis', 'report', 'status'],
+            'sector': ['industry', 'vertical', 'segment', 'category', 'group'],
+            'price': ['value', 'quote', 'trading at', 'worth', 'valuation', 'cost'],
+            'trending': ['popular', 'hot', 'buzz', 'spotlight', 'attention', 'focus']
+        }
 
         # Query templates for common patterns
         self.query_templates = {
@@ -33,6 +50,117 @@ class GraphRAGQueryEngine:
             'trending_news': self._get_trending_news_query
         }
 
+    def _semantic_intent_classification(self, query: str, entities: Dict) -> str:
+        """
+        Use LLM to classify query intent semantically.
+
+        Args:
+            query: Natural language query
+            entities: Extracted entities
+
+        Returns:
+            Classified intent
+        """
+        if not self.llm_client:
+            return self._rule_based_intent_classification(query)
+
+        intent_prompt = f"""You are a financial query classifier. Analyze the user's query and classify it into ONE of these intents:
+
+Available Intents:
+1. company_info - General information about a company (price, market cap, description, fundamentals)
+2. company_news - News articles and updates about companies
+3. company_events - Corporate events (earnings, mergers, acquisitions, filings)
+4. sentiment_analysis - Market sentiment, investor perception, mood, outlook, tone
+5. market_overview - Overall market summary, sector performance, market trends
+6. sector_companies - Companies within a specific sector/industry
+7. trending_news - Popular/trending topics and companies in the news
+8. company_relationships - Related companies, competitors, same sector companies
+
+User Query: "{query}"
+Extracted Entities: {json.dumps(entities)}
+
+Respond with ONLY the intent name (e.g., "sentiment_analysis"). Consider:
+- Synonyms and different phrasings (e.g., "mood" → sentiment, "feeling" → sentiment)
+- Financial terminology (e.g., "outlook" → sentiment, "performance" → company_info)
+- Context from extracted entities
+
+Intent:"""
+
+        try:
+            response = self.llm_client.generate_response(
+                prompt=intent_prompt,
+                temperature=0.1  # Low temperature for consistent classification
+            ).strip().lower()
+
+            # Validate the response
+            valid_intents = list(self.query_templates.keys())
+            if response in valid_intents:
+                return response
+
+            # Try to extract intent from response if LLM was verbose
+            for intent in valid_intents:
+                if intent in response:
+                    return intent
+
+            logger.warning(f"LLM returned invalid intent '{response}', falling back to rule-based")
+            return self._rule_based_intent_classification(query)
+
+        except Exception as e:
+            logger.warning(f"LLM intent classification failed: {e}, falling back to rule-based")
+            return self._rule_based_intent_classification(query)
+
+    def _rule_based_intent_classification(self, query: str) -> str:
+        """
+        Rule-based intent classification with enhanced synonym matching.
+
+        Args:
+            query: Natural language query
+
+        Returns:
+            Classified intent
+        """
+        query_lower = query.lower()
+
+        # Check for sentiment-related queries with expanded synonyms
+        sentiment_keywords = ['sentiment'] + self.financial_synonyms['sentiment']
+        if any(word in query_lower for word in sentiment_keywords):
+            return 'sentiment_analysis'
+
+        # Check for news-related queries
+        news_keywords = ['news'] + self.financial_synonyms['news']
+        if any(word in query_lower for word in news_keywords):
+            return 'company_news'
+
+        # Check for events
+        event_keywords = ['event'] + self.financial_synonyms['events']
+        if any(word in query_lower for word in event_keywords):
+            return 'company_events'
+
+        # Check for sector/industry queries
+        sector_keywords = ['sector'] + self.financial_synonyms['sector']
+        if any(word in query_lower for word in sector_keywords):
+            return 'sector_companies'
+
+        # Check for market overview
+        overview_keywords = ['overview'] + self.financial_synonyms['overview']
+        market_keywords = ['market'] + self.financial_synonyms['market']
+        if any(word in query_lower for word in overview_keywords + market_keywords):
+            # Distinguish between market overview and company info
+            if any(word in query_lower for word in overview_keywords):
+                return 'market_overview'
+
+        # Check for trending
+        trending_keywords = ['trending'] + self.financial_synonyms['trending']
+        if any(word in query_lower for word in trending_keywords):
+            return 'trending_news'
+
+        # Check for relationships
+        if any(word in query_lower for word in ['relationship', 'connection', 'related', 'similar', 'competitor', 'peer']):
+            return 'company_relationships'
+
+        # Default to company info
+        return 'company_info'
+
     def understand_query(self, query: str) -> Dict:
         """
         Understand user query and extract intent and entities.
@@ -43,28 +171,16 @@ class GraphRAGQueryEngine:
         Returns:
             Dictionary with query intent and extracted entities
         """
-        query_lower = query.lower()
-
         # Extract entities from query
         entities = self.entity_extractor.extract_financial_entities(query)
 
-        # Determine query intent
-        intent = 'company_info'  # default
-
-        if any(word in query_lower for word in ['news', 'article', 'headlines']):
-            intent = 'company_news'
-        elif any(word in query_lower for word in ['event', 'earnings', 'merger', 'acquisition']):
-            intent = 'company_events'
-        elif any(word in query_lower for word in ['sector', 'industry']):
-            intent = 'sector_companies'
-        elif any(word in query_lower for word in ['sentiment', 'feeling', 'positive', 'negative']):
-            intent = 'sentiment_analysis'
-        elif any(word in query_lower for word in ['market', 'overview', 'summary']):
-            intent = 'market_overview'
-        elif any(word in query_lower for word in ['trending', 'popular', 'hot']):
-            intent = 'trending_news'
-        elif any(word in query_lower for word in ['relationship', 'connection', 'related', 'similar']):
-            intent = 'company_relationships'
+        # Determine query intent using semantic or rule-based classification
+        if self.llm_client:
+            intent = self._semantic_intent_classification(query, entities)
+            logger.info(f"LLM classified intent: {intent}")
+        else:
+            intent = self._rule_based_intent_classification(query)
+            logger.info(f"Rule-based classified intent: {intent}")
 
         return {
             'intent': intent,
@@ -263,12 +379,12 @@ class GraphRAGQueryEngine:
         tickers = entities.get('tickers', [])
 
         if not tickers:
+            # Get overall market sentiment breakdown by company and sentiment type
             cypher = """
             MATCH (n:News)-[:MENTIONS]->(c:Company)
-            RETURN c.symbol as symbol, c.name as name,
-                   n.sentiment_label as sentiment,
-                   count(n) as article_count
-            GROUP BY c.symbol, c.name, n.sentiment_label
+            WITH c.symbol as symbol, c.name as name, n.sentiment_label as sentiment
+            WITH symbol, name, sentiment, count(*) as article_count
+            RETURN symbol, name, sentiment, article_count
             ORDER BY article_count DESC
             LIMIT 20
             """
@@ -277,11 +393,10 @@ class GraphRAGQueryEngine:
         symbol = tickers[0]
         cypher = """
         MATCH (n:News)-[:MENTIONS]->(c:Company {symbol: $symbol})
-        RETURN c.name as company_name,
-               n.sentiment_label as sentiment,
-               count(n) as count,
-               avg(n.sentiment_score) as avg_score
-        GROUP BY c.name, n.sentiment_label
+        WITH c.name as company_name, n.sentiment_label as sentiment, n.sentiment_score as score
+        WITH company_name, sentiment, count(*) as count, avg(score) as avg_score
+        RETURN company_name, sentiment, count, avg_score
+        ORDER BY count DESC
         """
 
         return cypher, {'symbol': symbol}

@@ -419,7 +419,9 @@ def show_home_page(connector):
         st.markdown("### Recent News")
 
         try:
-            query_engine = GraphRAGQueryEngine(connector)
+            # Initialize with LLM client if available
+            llm_client = st.session_state.get('llm_client')
+            query_engine = GraphRAGQueryEngine(connector, llm_client=llm_client)
             result = query_engine.execute_query("Show me trending news")
 
             if result['results']:
@@ -457,8 +459,8 @@ def show_ai_assistant_page(connector, llm_client):
         st.error("System not fully initialized. Check Neo4j connection and LLM configuration.")
         return
 
-    # Initialize query engine and generator
-    query_engine = GraphRAGQueryEngine(connector)
+    # Initialize query engine and generator with LLM client for semantic understanding
+    query_engine = GraphRAGQueryEngine(connector, llm_client=llm_client)
     generator = GraphRAGGenerator(llm_client)
 
     # Example queries
@@ -568,7 +570,6 @@ def show_market_dashboard_page(connector):
                c.price as price, c.price_change_pct as change,
                c.market_cap as market_cap, c.volume as volume
         ORDER BY c.market_cap DESC
-        LIMIT 20
         """
 
         results = connector.execute_query(query)

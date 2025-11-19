@@ -167,9 +167,17 @@ class GraphRAGGenerator:
 
         elif intent == 'sentiment_analysis':
             for item in results:
-                context_parts.append(f"\nCompany: {item.get('company_name', 'N/A')}")
+                # Handle both general (symbol/name) and specific (company_name) queries
+                company = item.get('company_name') or item.get('name') or item.get('symbol', 'N/A')
+                symbol = item.get('symbol', '')
+                if symbol and company != symbol:
+                    context_parts.append(f"\nCompany: {company} ({symbol})")
+                else:
+                    context_parts.append(f"\nCompany: {company}")
                 context_parts.append(f"  Sentiment: {item.get('sentiment', 'N/A')}")
-                context_parts.append(f"  Article Count: {item.get('count', 0)}")
+                # Handle both 'count' and 'article_count' field names
+                article_count = item.get('count') or item.get('article_count', 0)
+                context_parts.append(f"  Article Count: {article_count}")
                 if item.get('avg_score'):
                     context_parts.append(f"  Average Score: {item['avg_score']:.2f}")
 
